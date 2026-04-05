@@ -6,6 +6,7 @@ from moviepy.editor import ImageSequenceClip, AudioFileClip
 import tempfile
 import random
 import os
+import gc  # Garbage Collector per pulire la RAM
 
 # --- IDENTITÀ VISIVA Loop507 ---
 st.set_page_config(page_title="Recursive Cut Photo by Loop507", layout="wide")
@@ -21,7 +22,11 @@ st.markdown("""
     </div>
     """, unsafe_allow_html=True)
 
-# --- ANALISI AUDIO REALE (PEAK DETECTION) ---
+# --- FUNZIONE PULIZIA MEMORIA ---
+def clear_mem():
+    gc.collect()
+
+# --- ANALISI AUDIO REALE ---
 def get_real_audio_sync(audio_path, fps, max_dur):
     audio = AudioFileClip(audio_path)
     duration = min(audio.duration, max_dur)
@@ -32,8 +37,7 @@ def get_real_audio_sync(audio_path, fps, max_dur):
     for i in range(n_frames):
         t = i / fps
         try:
-            # Analisi volume picco in una finestra di 0.04s
-            chunk = audio.subclip(t, min(t + 0.04, duration))
+            chunk = audio.subclip(t, min(t + 0.05, duration))
             vol = chunk.max_volume()
             sync_data.append(vol)
         except:
@@ -42,24 +46,21 @@ def get_real_audio_sync(audio_path, fps, max_dur):
     max_v = max(sync_data) if sync_data and max(sync_data) > 0 else 1
     return [v / max_v for v in sync_data], duration, audio
 
-# --- MOTORE VISIVO RECURSIVE / KINETIC CON RANDOM STRANDS ---
+# --- MOTORE VISIVO OTTIMIZZATO ---
 def visual_engine(images, n_frames, intensity, sync_data, strand_size, orientation, mode, is_random):
     h, w, _ = images[0].shape
     frames = []
     dim = h if orientation == "Orizzontale" else w
     
-    # --- LOGICA GRANDEZZA LINEE ---
     strand_boundaries = []
     curr = 0
     if is_random:
-        # Chaos Mode: larghezza strisce imprevedibile
         while curr < dim:
             s_w = random.randint(max(1, strand_size // 2), strand_size * 2)
             if curr + s_w > dim: s_w = dim - curr
             strand_boundaries.append((curr, curr + s_w))
             curr += s_w
     else:
-        # Larghezza fissa classica
         n_strands = max(1, dim // strand_size)
         actual_s_size = dim // n_strands
         for s in range(n_strands):
@@ -77,7 +78,6 @@ def visual_engine(images, n_frames, intensity, sync_data, strand_size, orientati
             vol_boost = sync_data[f] if f < len(sync_data) else 0
             
             for s, (start, end) in enumerate(strand_boundaries):
-                # Il volume dell'audio spinge la velocità di scorrimento
                 offsets[s] += base_speeds[s] + (vol_boost * (intensity / 80))
                 idx = int(offsets[s] % len(images))
                 nxt = (idx + 1) % len(images)
@@ -90,12 +90,10 @@ def visual_engine(images, n_frames, intensity, sync_data, strand_size, orientati
                     strip = cv2.addWeighted(images[idx][:, start:end], 1-alpha, images[nxt][:, start:end], alpha, 0)
                     frame[:, start:end] = strip
             frames.append(frame)
-            
-    else: # Mode: Recursive (Stutter/Cut)
+    else:
         curr_i = 0
         threshold = max(0.05, 1.0 - (intensity / 100)) 
         for f in range(n_frames):
-            # Cambia immagine solo se il picco audio supera la soglia di intensità
             if f < len(sync_data) and sync_data[f] > threshold:
                 curr_i = (curr_i + 1) % len(images)
             frames.append(images[curr_i])
@@ -107,34 +105,37 @@ col_files, col_cfg = st.columns([1, 1])
 
 with col_files:
     st.subheader("📁 Input")
-    up_img = st.file_uploader("Carica Immagini (Artefatti)", type=["jpg", "png", "jpeg"], accept_multiple_files=True)
-    up_aud = st.file_uploader("Carica Audio (Guida)", type=["mp3", "wav"])
+    up_img = st.file_uploader("Carica Immagini", type=["jpg", "png", "jpeg"], accept_multiple_files=True)
+    up_aud = st.file_uploader("Carica Audio", type=["mp3", "wav"])
     format_out = st.selectbox("Formato Output", ["16:9 (Orizzontale)", "9:16 (Verticale)", "1:1 (Quadrato)"])
 
 with col_cfg:
     st.subheader("⚙️ Parametri")
-    mode = st.radio("Motore Algoritmo", ["Kinetic (Flusso)", "Recursive (Stutter)"])
-    strand_val = st.slider("Grandezza Linee Base (Pixel)", 1, 500, 40)
+    mode = st.radio("Motore", ["Kinetic (Flusso)", "Recursive (Stutter)"])
+    strand_val = st.slider("Grandezza Linee (Pixel)", 1, 500, 40)
     is_random = st.checkbox("Chaos Mode (Linee Random)", value=False)
-    intensity = st.slider("Intensità Glitch / Sensibilità Beat", 1, 100, 40)
+    intensity = st.slider("Intensità / Sensibilità Beat", 1, 100, 40)
     
     c1, c2 = st.columns(2)
-    with c1:
-        orientation = st.radio("Direzione Strisce", ["Orizzontale", "Verticale"])
-    with c2:
-        max_limit = st.number_input("Limite Max Durata (sec)", 1, 600, 60)
+    with c1: orientation = st.radio("Direzione", ["Orizzontale", "Verticale"])
+    with c2: max_limit = st.number_input("Limite Max Durata (sec)", 1, 300, 30)
 
-# --- GENERAZIONE ---
 if st.button("🎬 GENERA MASTER 720p") and up_img:
+    clear_mem() # Pulisce prima di iniziare
     if len(up_img) < 2:
         st.error("Servono almeno 2 immagini.")
     else:
-        with st.spinner("Masticando i dati per Loop507..."):
+        with st.spinner("Rendering in corso... non chiudere la pagina."):
             fps = 24
             res_map = {"16:9 (Orizzontale)": (1280, 720), "9:16 (Verticale)": (720, 1280), "1:1 (Quadrato)": (720, 720)}
             target_res = res_map[format_out]
             
-            imgs = [np.array(Image.open(f).convert("RGB").resize(target_res, Image.Resampling.NEAREST)) for f in up_img]
+            # Carichiamo immagini e liberiamo subito la memoria PIL
+            imgs = []
+            for f in up_img:
+                img = Image.open(f).convert("RGB").resize(target_res, Image.Resampling.NEAREST)
+                imgs.append(np.array(img))
+                del img
             
             audio_clip = None
             aud_path = None
@@ -145,21 +146,23 @@ if st.button("🎬 GENERA MASTER 720p") and up_img:
                 sync_data, final_dur, audio_clip = get_real_audio_sync(aud_path, fps, max_limit)
             else:
                 final_dur = max_limit
-                # Senza audio simuliamo un battito casuale basato sull'intensità
                 sync_data = [1.0 if random.random() > (1.0 - intensity/100) else 0.2 for _ in range(int(final_dur * fps))]
 
+            # Rendering frame
             video_frames = visual_engine(imgs, int(final_dur * fps), intensity, sync_data, strand_val, orientation, mode, is_random)
             
+            # Creazione clip e salvataggio
             v_clip = ImageSequenceClip(video_frames, fps=fps)
-            if audio_clip:
-                v_clip = v_clip.set_audio(audio_clip)
+            if audio_clip: v_clip = v_clip.set_audio(audio_clip)
             
             out_file = tempfile.mktemp(suffix=".mp4")
-            v_clip.write_videofile(out_file, codec="libx264", audio_codec="aac" if audio_clip else None, fps=fps, bitrate="3500k", logger=None)
+            v_clip.write_videofile(out_file, codec="libx264", audio_codec="aac" if audio_clip else None, fps=fps, bitrate="2500k", logger=None)
 
             st.video(out_file)
             with open(out_file, "rb") as f:
                 st.download_button("💾 SCARICA ARTEFATTO", f, file_name="RecursiveCut_Loop507.mp4")
 
-            if up_aud:
-                os.remove(aud_path)
+            # PULIZIA FINALE AGGRESSIVA
+            if up_aud: os.remove(aud_path)
+            del video_frames, imgs, v_clip
+            clear_mem()
