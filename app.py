@@ -21,12 +21,13 @@ st.markdown("""
     </div>
     """, unsafe_allow_html=True)
 
-# --- ANALISI AUDIO REALE ---
+# --- ANALISI AUDIO REALE (PEAK DETECTION) ---
 def get_real_audio_sync(audio_path, fps, max_dur):
     audio = AudioFileClip(audio_path)
     duration = min(audio.duration, max_dur)
     audio = audio.subclip(0, duration)
     n_frames = int(duration * fps)
+    
     sync_data = []
     for i in range(n_frames):
         t = i / fps
@@ -36,6 +37,7 @@ def get_real_audio_sync(audio_path, fps, max_dur):
             sync_data.append(vol)
         except:
             sync_data.append(0)
+    
     max_v = max(sync_data) if sync_data and max(sync_data) > 0 else 1
     return [v / max_v for v in sync_data], duration, audio
 
@@ -45,17 +47,18 @@ def visual_engine(images, n_frames, intensity, sync_data, strand_size, orientati
     frames = []
     dim = h if orientation == "Orizzontale" else w
     
-    # Calcolo delle coordinate delle strisce (Fisse o Random)
+    # --- LOGICA GRANDEZZA LINEE (FISSE O RANDOM) ---
     strand_boundaries = []
     curr = 0
     if is_random:
+        # Se attivato, crea sezioni di larghezza imprevedibile
         while curr < dim:
-            # La larghezza varia tra la metà e il doppio dello strand_size impostato
             s_w = random.randint(max(1, strand_size // 2), strand_size * 2)
             if curr + s_w > dim: s_w = dim - curr
             strand_boundaries.append((curr, curr + s_w))
             curr += s_w
     else:
+        # Larghezza fissa classica
         n_strands = max(1, dim // strand_size)
         actual_s_size = dim // n_strands
         for s in range(n_strands):
@@ -73,6 +76,7 @@ def visual_engine(images, n_frames, intensity, sync_data, strand_size, orientati
             vol_boost = sync_data[f] if f < len(sync_data) else 0
             
             for s, (start, end) in enumerate(strand_boundaries):
+                # Il volume spinge lo scorrimento
                 offsets[s] += base_speeds[s] + (vol_boost * (intensity / 80))
                 idx = int(offsets[s] % len(images))
                 nxt = (idx + 1) % len(images)
@@ -101,8 +105,8 @@ col_files, col_cfg = st.columns([1, 1])
 
 with col_files:
     st.subheader("📁 Input")
-    up_img = st.file_uploader("Immagini (Artefatti)", type=["jpg", "png", "jpeg"], accept_multiple_files=True)
-    up_aud = st.file_uploader("Audio (Guida)", type=["mp3", "wav"])
+    up_img = st.file_uploader("Carica Immagini (Artefatti)", type=["jpg", "png", "jpeg"], accept_multiple_files=True)
+    up_aud = st.file_uploader("Carica Audio (Guida)", type=["mp3", "wav"])
     format_out = st.selectbox("Formato Output", ["16:9 (Orizzontale)", "9:16 (Verticale)", "1:1 (Quadrato)"])
 
 with col_cfg:
@@ -118,17 +122,21 @@ with col_cfg:
     with c2:
         max_limit = st.number_input("Limite Max Durata (sec)", 1, 600, 60)
 
+# --- GENERAZIONE ---
 if st.button("🎬 GENERA MASTER 720p") and up_img:
     if len(up_img) < 2:
-        st.error("Carica almeno 2 immagini.")
+        st.error("Carica almeno 2 immagini per far funzionare i tagli.")
     else:
-        with st.spinner("Generando l'artefatto..."):
+        with st.spinner("Masticando i dati... l'artefatto è in arrivo."):
             fps = 24
             res_map = {"16:9 (Orizzontale)": (1280, 720), "9:16 (Verticale)": (720, 1280), "1:1 (Quadrato)": (720, 720)}
             target_res = res_map[format_out]
+            
+            # Caricamento e resize NEAREST per mantenere i bordi glitch "croccanti"
             imgs = [np.array(Image.open(f).convert("RGB").resize(target_res, Image.Resampling.NEAREST)) for f in up_img]
             
             audio_clip = None
+            aud_path = None
             if up_aud:
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as t_aud:
                     t_aud.write(up_aud.read())
@@ -139,8 +147,10 @@ if st.button("🎬 GENERA MASTER 720p") and up_img:
                 sync_data = [1.0 if random.random() > (1.0 - intensity/100) else 0.2 for _ in range(int(final_dur * fps))]
 
             video_frames = visual_engine(imgs, int(final_dur * fps), intensity, sync_data, strand_val, orientation, mode, is_random)
+            
             v_clip = ImageSequenceClip(video_frames, fps=fps)
-            if audio_clip: v_clip = v_clip.set_audio(audio_clip)
+            if audio_clip:
+                v_clip = v_clip.set_audio(audio_clip)
             
             out_file = tempfile.mktemp(suffix=".mp4")
             v_clip.write_videofile(out_file, codec="libx264", audio_codec="aac" if audio_clip else None, fps=fps, bitrate="3500k", logger=None)
@@ -148,4 +158,6 @@ if st.button("🎬 GENERA MASTER 720p") and up_img:
             st.video(out_file)
             with open(out_file, "rb") as f:
                 st.download_button("💾 SCARICA ARTEFATTO", f, file_name="RecursiveCut_Loop507.mp4")
-            if up_aud: os.remove(aud_path)
+
+            if up_aud:
+                os.remove(aud_path)
