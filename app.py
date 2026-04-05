@@ -2,167 +2,98 @@ import streamlit as st
 import numpy as np
 import cv2
 from PIL import Image
-from moviepy.editor import ImageSequenceClip, AudioFileClip
 import tempfile
 import random
 import os
-import gc  # Garbage Collector per pulire la RAM
+import gc
 
-# --- IDENTITÀ VISIVA Loop507 ---
 st.set_page_config(page_title="Recursive Cut Photo by Loop507", layout="wide")
 
-st.markdown("""
-    <style>
-    .main-title { font-size: 42px; font-weight: bold; margin-bottom: -5px; color: #ffffff; }
-    .sub-title { font-size: 16px; color: #888; margin-bottom: 30px; letter-spacing: 1px; }
-    </style>
-    <div>
-        <span class="main-title">Recursive Cut Photo</span><br>
-        <span class="sub-title">by Loop507</span>
-    </div>
-    """, unsafe_allow_html=True)
-
-# --- FUNZIONE PULIZIA MEMORIA ---
-def clear_mem():
-    gc.collect()
-
-# --- ANALISI AUDIO REALE ---
-def get_real_audio_sync(audio_path, fps, max_dur):
-    audio = AudioFileClip(audio_path)
-    duration = min(audio.duration, max_dur)
-    audio = audio.subclip(0, duration)
-    n_frames = int(duration * fps)
-    
-    sync_data = []
-    for i in range(n_frames):
-        t = i / fps
-        try:
-            chunk = audio.subclip(t, min(t + 0.05, duration))
-            vol = chunk.max_volume()
-            sync_data.append(vol)
-        except:
-            sync_data.append(0)
-    
-    max_v = max(sync_data) if sync_data and max(sync_data) > 0 else 1
-    return [v / max_v for v in sync_data], duration, audio
-
-# --- MOTORE VISIVO OTTIMIZZATO ---
-def visual_engine(images, n_frames, intensity, sync_data, strand_size, orientation, mode, is_random):
-    h, w, _ = images[0].shape
-    frames = []
-    dim = h if orientation == "Orizzontale" else w
-    
-    strand_boundaries = []
-    curr = 0
-    if is_random:
-        while curr < dim:
-            s_w = random.randint(max(1, strand_size // 2), strand_size * 2)
-            if curr + s_w > dim: s_w = dim - curr
-            strand_boundaries.append((curr, curr + s_w))
-            curr += s_w
-    else:
-        n_strands = max(1, dim // strand_size)
-        actual_s_size = dim // n_strands
-        for s in range(n_strands):
-            start = s * actual_s_size
-            end = (s + 1) * actual_s_size if s < n_strands - 1 else dim
-            strand_boundaries.append((start, end))
-
-    if mode == "Kinetic (Flusso)":
-        n_strands = len(strand_boundaries)
-        offsets = [random.uniform(0, len(images)) for _ in range(n_strands)]
-        base_speeds = [random.uniform(0.005, 0.02) for _ in range(n_strands)]
-
-        for f in range(n_frames):
-            frame = np.zeros((h, w, 3), dtype=np.uint8)
-            vol_boost = sync_data[f] if f < len(sync_data) else 0
-            
-            for s, (start, end) in enumerate(strand_boundaries):
-                offsets[s] += base_speeds[s] + (vol_boost * (intensity / 80))
-                idx = int(offsets[s] % len(images))
-                nxt = (idx + 1) % len(images)
-                alpha = offsets[s] % 1
-                
-                if orientation == "Orizzontale":
-                    strip = cv2.addWeighted(images[idx][start:end, :], 1-alpha, images[nxt][start:end, :], alpha, 0)
-                    frame[start:end, :] = strip
-                else:
-                    strip = cv2.addWeighted(images[idx][:, start:end], 1-alpha, images[nxt][:, start:end], alpha, 0)
-                    frame[:, start:end] = strip
-            frames.append(frame)
-    else:
-        curr_i = 0
-        threshold = max(0.05, 1.0 - (intensity / 100)) 
-        for f in range(n_frames):
-            if f < len(sync_data) and sync_data[f] > threshold:
-                curr_i = (curr_i + 1) % len(images)
-            frames.append(images[curr_i])
-            
-    return frames
-
 # --- INTERFACCIA ---
-col_files, col_cfg = st.columns([1, 1])
+st.title("Recursive Cut Photo")
+st.caption("by Loop507 | Optimized Iron Version")
 
-with col_files:
-    st.subheader("📁 Input")
-    up_img = st.file_uploader("Carica Immagini", type=["jpg", "png", "jpeg"], accept_multiple_files=True)
-    up_aud = st.file_uploader("Carica Audio", type=["mp3", "wav"])
-    format_out = st.selectbox("Formato Output", ["16:9 (Orizzontale)", "9:16 (Verticale)", "1:1 (Quadrato)"])
+up_img = st.file_uploader("Carica Immagini", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
+up_aud = st.file_uploader("Carica Audio (opzionale)", type=["mp3", "wav"])
 
-with col_cfg:
-    st.subheader("⚙️ Parametri")
+col1, col2 = st.columns(2)
+with col1:
     mode = st.radio("Motore", ["Kinetic (Flusso)", "Recursive (Stutter)"])
-    strand_val = st.slider("Grandezza Linee (Pixel)", 1, 500, 40)
-    is_random = st.checkbox("Chaos Mode (Linee Random)", value=False)
-    intensity = st.slider("Intensità / Sensibilità Beat", 1, 100, 40)
-    
-    c1, c2 = st.columns(2)
-    with c1: orientation = st.radio("Direzione", ["Orizzontale", "Verticale"])
-    with c2: max_limit = st.number_input("Limite Max Durata (sec)", 1, 300, 30)
+    strand_val = st.slider("Grandezza Linee", 1, 500, 40)
+    is_random = st.checkbox("Chaos Mode (Random Lines)")
+with col2:
+    intensity = st.slider("Intensità", 1, 100, 40)
+    max_limit = st.number_input("Durata Max (sec)", 1, 60, 15)
 
-if st.button("🎬 GENERA MASTER 720p") and up_img:
-    clear_mem() # Pulisce prima di iniziare
+if st.button("🎬 GENERA VIDEO") and up_img:
     if len(up_img) < 2:
-        st.error("Servono almeno 2 immagini.")
+        st.error("Carica almeno 2 immagini.")
     else:
-        with st.spinner("Rendering in corso... non chiudere la pagina."):
+        with st.spinner("Rendering a basso consumo di RAM..."):
+            # 1. Setup Dimensioni (720p per sicurezza)
+            w, h = 1280, 720
             fps = 24
-            res_map = {"16:9 (Orizzontale)": (1280, 720), "9:16 (Verticale)": (720, 1280), "1:1 (Quadrato)": (720, 720)}
-            target_res = res_map[format_out]
+            total_frames = int(max_limit * fps)
             
-            # Carichiamo immagini e liberiamo subito la memoria PIL
+            # 2. Caricamento Immagini (Ridimensionate subito per risparmiare RAM)
             imgs = []
-            for f in up_img:
-                img = Image.open(f).convert("RGB").resize(target_res, Image.Resampling.NEAREST)
+            for f in up_img[:40]: # Limite a 40 immagini
+                img = Image.open(f).convert("RGB").resize((w, h), Image.Resampling.NEAREST)
                 imgs.append(np.array(img))
                 del img
-            
-            audio_clip = None
-            aud_path = None
-            if up_aud:
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as t_aud:
-                    t_aud.write(up_aud.read())
-                    aud_path = t_aud.name
-                sync_data, final_dur, audio_clip = get_real_audio_sync(aud_path, fps, max_limit)
-            else:
-                final_dur = max_limit
-                sync_data = [1.0 if random.random() > (1.0 - intensity/100) else 0.2 for _ in range(int(final_dur * fps))]
+            gc.collect()
 
-            # Rendering frame
-            video_frames = visual_engine(imgs, int(final_dur * fps), intensity, sync_data, strand_val, orientation, mode, is_random)
-            
-            # Creazione clip e salvataggio
-            v_clip = ImageSequenceClip(video_frames, fps=fps)
-            if audio_clip: v_clip = v_clip.set_audio(audio_clip)
-            
-            out_file = tempfile.mktemp(suffix=".mp4")
-            v_clip.write_videofile(out_file, codec="libx264", audio_codec="aac" if audio_clip else None, fps=fps, bitrate="2500k", logger=None)
+            # 3. Preparazione File Video (Scrittura diretta su disco)
+            tmp_video = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v') # Codec standard
+            out_video = cv2.VideoWriter(tmp_video.name, fourcc, fps, (w, h))
 
-            st.video(out_file)
-            with open(out_file, "rb") as f:
-                st.download_button("💾 SCARICA ARTEFATTO", f, file_name="RecursiveCut_Loop507.mp4")
+            # 4. Engine di Rendering (Frame per Frame)
+            # Creiamo una finta sync se non c'è audio per non appesantire
+            sync_data = [random.random() for _ in range(total_frames)]
+            
+            # Grid Logic
+            boundaries = []
+            curr = 0
+            while curr < (h if mode == "Kinetic (Flusso)" else h):
+                s_w = random.randint(max(1, strand_val//2), strand_val*2) if is_random else strand_val
+                if curr + s_w > h: s_w = h - curr
+                boundaries.append((curr, curr + s_w))
+                curr += s_w
 
-            # PULIZIA FINALE AGGRESSIVA
-            if up_aud: os.remove(aud_path)
-            del video_frames, imgs, v_clip
-            clear_mem()
+            offsets = [random.uniform(0, len(imgs)) for _ in range(len(boundaries))]
+            
+            # Loop di rendering
+            prog_bar = st.progress(0)
+            for f in range(total_frames):
+                if mode == "Kinetic (Flusso)":
+                    frame = np.zeros((h, w, 3), dtype=np.uint8)
+                    for s, (start, end) in enumerate(boundaries):
+                        offsets[s] += 0.01 + (sync_data[f] * (intensity/100))
+                        idx = int(offsets[s] % len(imgs))
+                        nxt = (idx + 1) % len(imgs)
+                        alpha = offsets[s] % 1
+                        # Mixing
+                        strip = cv2.addWeighted(imgs[idx][start:end, :], 1-alpha, imgs[nxt][start:end, :], alpha, 0)
+                        frame[start:end, :] = strip
+                else: # Recursive
+                    idx = int((f * intensity / 10) % len(imgs))
+                    frame = imgs[idx]
+
+                # Converti RGB in BGR per OpenCV e scrivi su disco
+                out_video.write(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
+                
+                if f % 24 == 0: # Aggiorna progresso ogni secondo di video
+                    prog_bar.progress(f / total_frames)
+            
+            out_video.release()
+            
+            # 5. Output
+            st.success("Video generato!")
+            with open(tmp_video.name, "rb") as v_file:
+                st.download_button("💾 SCARICA VIDEO", v_file, file_name="loop507_artefatto.mp4")
+            
+            # Pulizia
+            os.unlink(tmp_video.name)
+            del imgs
+            gc.collect()
