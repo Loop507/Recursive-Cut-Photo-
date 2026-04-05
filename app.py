@@ -32,6 +32,7 @@ def get_real_audio_sync(audio_path, fps, max_dur):
     for i in range(n_frames):
         t = i / fps
         try:
+            # Analisi volume picco in una finestra di 0.04s
             chunk = audio.subclip(t, min(t + 0.04, duration))
             vol = chunk.max_volume()
             sync_data.append(vol)
@@ -47,11 +48,11 @@ def visual_engine(images, n_frames, intensity, sync_data, strand_size, orientati
     frames = []
     dim = h if orientation == "Orizzontale" else w
     
-    # --- LOGICA GRANDEZZA LINEE (FISSE O RANDOM) ---
+    # --- LOGICA GRANDEZZA LINEE ---
     strand_boundaries = []
     curr = 0
     if is_random:
-        # Se attivato, crea sezioni di larghezza imprevedibile
+        # Chaos Mode: larghezza strisce imprevedibile
         while curr < dim:
             s_w = random.randint(max(1, strand_size // 2), strand_size * 2)
             if curr + s_w > dim: s_w = dim - curr
@@ -76,7 +77,7 @@ def visual_engine(images, n_frames, intensity, sync_data, strand_size, orientati
             vol_boost = sync_data[f] if f < len(sync_data) else 0
             
             for s, (start, end) in enumerate(strand_boundaries):
-                # Il volume spinge lo scorrimento
+                # Il volume dell'audio spinge la velocità di scorrimento
                 offsets[s] += base_speeds[s] + (vol_boost * (intensity / 80))
                 idx = int(offsets[s] % len(images))
                 nxt = (idx + 1) % len(images)
@@ -90,10 +91,11 @@ def visual_engine(images, n_frames, intensity, sync_data, strand_size, orientati
                     frame[:, start:end] = strip
             frames.append(frame)
             
-    else: # Recursive (Stutter/Cut)
+    else: # Mode: Recursive (Stutter/Cut)
         curr_i = 0
         threshold = max(0.05, 1.0 - (intensity / 100)) 
         for f in range(n_frames):
+            # Cambia immagine solo se il picco audio supera la soglia di intensità
             if f < len(sync_data) and sync_data[f] > threshold:
                 curr_i = (curr_i + 1) % len(images)
             frames.append(images[curr_i])
@@ -112,9 +114,9 @@ with col_files:
 with col_cfg:
     st.subheader("⚙️ Parametri")
     mode = st.radio("Motore Algoritmo", ["Kinetic (Flusso)", "Recursive (Stutter)"])
-    strand_val = st.slider("Grandezza Linee (Pixel)", 1, 500, 40)
-    is_random = st.checkbox("Linee a Larghezza Variabile (Chaos Mode)", value=False)
-    intensity = st.slider("Intensità Glitch / Sensibilità", 1, 100, 40)
+    strand_val = st.slider("Grandezza Linee Base (Pixel)", 1, 500, 40)
+    is_random = st.checkbox("Chaos Mode (Linee Random)", value=False)
+    intensity = st.slider("Intensità Glitch / Sensibilità Beat", 1, 100, 40)
     
     c1, c2 = st.columns(2)
     with c1:
@@ -125,14 +127,13 @@ with col_cfg:
 # --- GENERAZIONE ---
 if st.button("🎬 GENERA MASTER 720p") and up_img:
     if len(up_img) < 2:
-        st.error("Carica almeno 2 immagini per far funzionare i tagli.")
+        st.error("Servono almeno 2 immagini.")
     else:
-        with st.spinner("Masticando i dati... l'artefatto è in arrivo."):
+        with st.spinner("Masticando i dati per Loop507..."):
             fps = 24
             res_map = {"16:9 (Orizzontale)": (1280, 720), "9:16 (Verticale)": (720, 1280), "1:1 (Quadrato)": (720, 720)}
             target_res = res_map[format_out]
             
-            # Caricamento e resize NEAREST per mantenere i bordi glitch "croccanti"
             imgs = [np.array(Image.open(f).convert("RGB").resize(target_res, Image.Resampling.NEAREST)) for f in up_img]
             
             audio_clip = None
@@ -144,6 +145,7 @@ if st.button("🎬 GENERA MASTER 720p") and up_img:
                 sync_data, final_dur, audio_clip = get_real_audio_sync(aud_path, fps, max_limit)
             else:
                 final_dur = max_limit
+                # Senza audio simuliamo un battito casuale basato sull'intensità
                 sync_data = [1.0 if random.random() > (1.0 - intensity/100) else 0.2 for _ in range(int(final_dur * fps))]
 
             video_frames = visual_engine(imgs, int(final_dur * fps), intensity, sync_data, strand_val, orientation, mode, is_random)
