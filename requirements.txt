@@ -2,5 +2,6 @@ streamlit
 numpy
 opencv-python-headless
 Pillow
+imageio
+imageio-ffmpeg
 moviepy
-librosa
