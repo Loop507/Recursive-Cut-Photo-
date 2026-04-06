@@ -39,8 +39,8 @@ def generate_master(up_master, up_trit, up_aud, mode, orientation, strand_val, s
     m_pil = Image.open(up_master).convert("RGB")
     m_img = resize_to_format(np.array(m_pil), format_type)
     
+    # AGGIUNGIAMO LA MASTER alla lista delle foto tritate (suffering together)
     t_imgs_raw = [np.array(Image.open(f).convert("RGB")) for f in up_trit[:30]]
-    # Fondamentale: AGGIUNGIAMO LA MASTER alla lista delle foto tritate
     t_imgs_raw.append(m_img) 
     
     t_processed = [resize_to_format(img, format_type) for img in t_imgs_raw]
@@ -61,36 +61,46 @@ def generate_master(up_master, up_trit, up_aud, mode, orientation, strand_val, s
 
     for f in range(total_f):
         curr_s = f / fps
-        # Curva intensità semplice 3 punti
+        # Curva intensità semplice 3 punti (Start, Picco, End)
         mid = max_limit / 2
         val = (k_p['sv'] + (f/(total_f/2))*(k_p['pv']-k_p['sv']))/100 if curr_s <= mid else (k_p['pv'] + ((curr_s-mid)/mid)*(k_p['ev']-k_p['pv']))/100
         
-        # 3. Magnetismo (Ricomposizione Organica)
-        # Invece dell'opacità globale, calcoliamo una probabilità magnetica per ogni striscia
+        # 3. Magnetismo & Distorsione Master
         magnet_prob = 0.0
+        # Offset massimo di distorsione per i pezzi della Master (fino a 100px al picco)
+        distortion_offset_max = 100 * val 
+
         if curr_s > o_p['start_fade']:
             t_fade = (curr_s - o_p['start_fade']) / (max_limit - o_p['start_fade'])
             magnet_prob = min(1.0, t_fade * (o_p['final_v'] / 100))
+            # Man mano che il magnetismo sale, la distorsione cala a zero
+            distortion_offset_max *= (1 - magnet_prob)
 
         frame = np.zeros((h, w, 3), dtype=np.uint8)
         
         # 4. Rendering Frame-by-Frame
         if mode == "Kinetic (Flusso)":
             for s, (start, end) in enumerate(boundaries):
-                # Se il magnetismo vince, la striscia si blocca sulla Master
+                # Se il magnetismo vince, la striscia si blocca sulla Master...
                 if random.random() < magnet_prob:
                     if orientation=="Orizzontale": frame[start:end, :] = m_img[start:end, :]
                     else: frame[:, start:end] = m_img[:, start:end]
                 else:
-                    # Altrimenti continua il tritato
+                    # ...altrimenti continua il tritato, ma se pesca la Master, la distorce.
                     offsets[s] += (0.02 + (val * 0.4))
                     idx, nxt, alpha = int(offsets[s]%len(t_processed)), int((offsets[s]+1)%len(t_processed)), offsets[s]%1
+                    
+                    # Calcolo distorsione casuale per questa striscia
+                    dist = int(random.uniform(-distortion_offset_max, distortion_offset_max))
+                    
                     if orientation=="Orizzontale":
-                        frame[start:end, :] = cv2.addWeighted(t_processed[idx][start:end, :], 1-alpha, t_processed[nxt][start:end, :], alpha, 0)
+                        frame[start:end, :] = cv2.addWeighted(np.roll(t_processed[idx][start:end, :], dist, axis=1), 1-alpha, 
+                                                            np.roll(t_processed[nxt][start:end, :], dist, axis=1), alpha, 0)
                     else:
-                        frame[:, start:end] = cv2.addWeighted(t_processed[idx][:, start:end], 1-alpha, t_processed[nxt][:, start:end], alpha, 0)
+                        frame[:, start:end] = cv2.addWeighted(np.roll(t_processed[idx][:, start:end], dist, axis=0), 1-alpha, 
+                                                            np.roll(t_processed[nxt][:, start:end], dist, axis=0), alpha, 0)
         else:
-            # Recursive (Stutter) Magnetico
+            # Recursive (Stutter) Magnetico & Distorto
             idx_base = (f * intens_rec * 0.1 * speed_rec)
             for s, (start, end) in enumerate(boundaries):
                 if random.random() < magnet_prob:
@@ -98,10 +108,14 @@ def generate_master(up_master, up_trit, up_aud, mode, orientation, strand_val, s
                     if orientation=="Orizzontale": frame[start:end, :] = m_img[start:end, :]
                     else: frame[:, start:end] = m_img[:, start:end]
                 else:
-                    # Tritato Recursive nervoso
+                    # Tritato Recursive nervoso, con distorsione se pesca la Master
                     l_idx = int((idx_base + s) % len(t_processed))
-                    if orientation=="Orizzontale": frame[start:end, :] = t_processed[l_idx][start:end, :]
-                    else: frame[:, start:end] = t_processed[l_idx][:, start:end]
+                    dist = int(random.uniform(-distortion_offset_max, distortion_offset_max))
+                    
+                    if orientation=="Orizzontale": 
+                        frame[start:end, :] = np.roll(t_processed[l_idx][start:end, :], dist, axis=1)
+                    else: 
+                        frame[:, start:end] = np.roll(t_processed[l_idx][:, start:end], dist, axis=0)
 
         final_frames.append(frame)
 
